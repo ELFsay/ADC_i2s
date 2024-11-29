@@ -1,0 +1,7 @@
+*
+!main
+!main/**
+!components
+!components/**
+!.gitignore
+!sdkconfig
