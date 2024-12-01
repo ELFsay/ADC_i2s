@@ -1,5 +1,5 @@
-#ifndef __ESP32_ADC_I2S_DRIVER_H__
-#define __ESP32_ADC_I2S_DRIVER_H__
+#ifndef esp32_adc_dma_driver_h_
+#define esp32_adc_dma_driver_h_
 #include <hal/adc_types.h>
 #include <esp_adc/adc_filter.h>
 #include <hal/adc_hal.h>
@@ -9,7 +9,6 @@
 #include <esp_pm.h>
 #include "esp_check.h"
 #include "esp_adc/adc_continuous.h" //其余函数可从该头文件中寻找
-
 
 typedef enum
 {
@@ -67,14 +66,28 @@ struct adc_continuous_ctx_t
 };
 
 
-IRAM_ATTR bool get_adc_value(uint8_t *data, uint32_t *size);
-IRAM_ATTR bool read_adc_data(adc_continuous_ctx_t *adc_digi_ctx, uint8_t *data, uint32_t *size);
+// 读取ADC数据的函数。
+// 参数：
+// - data：指向存储ADC读取结果的uint32_t数组的指针。
+// - channel：指向用于指定读取的ADC通道的uint8_t指针。
+// - gpio_num：指定连接到ADC的GPIO引脚的数量。
+bool read_adc_data(uint32_t *data, uint8_t *channel, uint32_t gpio_num);
 
-esp_err_t adc_i2s_new_handle(const adc_continuous_handle_cfg_t *hdl_config, adc_continuous_handle_t *ret_handle);
-esp_err_t adc_i2s_read(adc_continuous_handle_t handle, uint8_t *buf, uint32_t length_max, uint32_t *out_length, uint32_t timeout_ms);
 
-inline esp_err_t adc_i2s_start(adc_continuous_handle_t handle) { adc_continuous_start(handle); }
+// esp_err_t adc_dma_new_handle(const adc_continuous_handle_cfg_t *hdl_config, adc_continuous_handle_t *ret_handle);
 
-inline esp_err_t adc_i2s_stop(adc_continuous_handle_t handle) { adc_continuous_stop(handle); }
+
+// 初始化ADC DMA。
+// 参数：
+// - gpio：指向GPIO数组的指针，用于指定ADC输入的GPIO引脚。
+// - gpio_num：指定GPIO引脚的数量。
+// - sample_freq_hz：采样频率（以赫兹为单位）。
+
+void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, uint32_t sample_freq_hz);
+
+
+inline esp_err_t adc_dma_start(adc_continuous_handle_t handle) { adc_continuous_start(handle); }
+
+inline esp_err_t adc_dma_stop(adc_continuous_handle_t handle) { adc_continuous_stop(handle); }
 
 #endif //__ESP32_ADC_I2S_DRIVER_H__
