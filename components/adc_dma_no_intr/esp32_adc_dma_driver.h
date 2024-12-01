@@ -71,7 +71,7 @@ struct adc_continuous_ctx_t
 // - data：指向存储ADC读取结果的uint32_t数组的指针。
 // - channel：指向用于指定读取的ADC通道的uint8_t指针。
 // - gpio_num：指定连接到ADC的GPIO引脚的数量。
-bool read_adc_data(uint32_t *data, uint8_t *channel, uint32_t gpio_num);
+bool read_adc_data(int32_t *data, uint8_t *channel, uint32_t gpio_num);
 
 
 // esp_err_t adc_dma_new_handle(const adc_continuous_handle_cfg_t *hdl_config, adc_continuous_handle_t *ret_handle);

@@ -4,20 +4,27 @@
 #include "esp_clk_tree.h"
 #include <driver/gpio.h>
 #include "soc/lldesc.h"
-
-// #define DMA_CONTINUE false
+#include <esp_adc/adc_cali_scheme.h>
+// 多adc单元不完整且未测试
+//  #define DMA_CONTINUE false
 #define DMA_INTR false
-// #define RING_BUFFFER DMA_INTR
-// #define DMA_CONV_NUM_PER_TIME 2 // 定义DMA每次获取2帧数据 一帧4字节
+#define ADC_ATTEN_DB ADC_ATTEN_DB_12 // adc参考电压1.1v
 adc_channel_t *adc_channel = NULL;
 adc_unit_t *adc_unit_id = NULL;
 uint32_t adc_conv_frame_size = 0;
-adc_continuous_handle_t adc_handle;
+bool conv_mode_single = true; // 是否为单通道模式
+
+adc_continuous_handle_t adc_handle = NULL;
+adc_cali_handle_t cali_handle_t_1 = NULL;
+adc_cali_handle_t cali_handle_t_2 = NULL;
+
 static const char *TAG = "adc_dma_oneshot";
 #define INTERNAL_BUF_NUM 3
 #if CONFIG_IDF_TARGET_ESP32
 esp_err_t i2s_platform_acquire_occupation(int id, const char *comp_name);
 void adc_apb_periph_claim(void);
+#define adc_ll_digi_dma_enable() adc_ll_digi_set_data_source(1) // Will this influence I2S0
+#define adc_ll_digi_dma_disable() adc_ll_digi_set_data_source(0)
 /*
 #define adc_dma_ll_rx_get_intr(dev, mask) ({ i2s_ll_get_intr_status(dev) & mask; })
 #define adc_dma_ll_rx_clear_intr(dev, chan, mask) i2s_ll_clear_intr_status(dev, mask)
@@ -59,41 +66,73 @@ void adc_apb_periph_claim(void);
 */
 #endif
 
-IRAM_ATTR bool read_adc_data( uint32_t *data, uint8_t *channel, uint32_t gpio_num)
+IRAM_ATTR bool read_adc_data(int32_t *data, uint8_t *channel, uint32_t gpio_num)
 {
-   
-     while (adc_hal_check_event(&adc_handle->hal, ADC_HAL_DMA_INTR_MASK) == false) // 等待DMA转换换成
-         ;
-     adc_hal_digi_clr_intr(&adc_handle->hal, ADC_HAL_DMA_INTR_MASK); // 清除DMA标志位
-    /*
+
+    while (adc_hal_check_event(&adc_handle->hal, ADC_HAL_DMA_INTR_MASK) == false) // 等待DMA转换换成
+        ;
+    adc_hal_digi_clr_intr(&adc_handle->hal, ADC_HAL_DMA_INTR_MASK); // 清除DMA标志位
+
     // 不知道该不该加
     // adc_handle->rx_eof_desc_addr = adc_hal_get_desc_addr(&adc_handle->hal);
-
+    //
     // adc_ll_digi_dma_disable();
     // adc_ll_digi_trigger_disable(adc_handle->hal.dev);
-    */
+
     // 转换数据格式
     // for (int i = 0; i < gpio_num; i++)
     for (int i = 0; i < adc_conv_frame_size * INTERNAL_BUF_NUM; i += SOC_ADC_DIGI_RESULT_BYTES)
     {
         adc_digi_output_data_t *p = (void *)&adc_handle->rx_dma_buf[i];
+        // static int count = 0;//数据足够后跳出 但无法使用滤波器
+
         for (int j = 0; j < gpio_num; j++)
         {
-            if (adc_channel[j] == p->type1.channel)
+            if (conv_mode_single == true)
             {
-                channel[j] = p->type1.channel;
-                data[j] = p->type1.data;
+                if (adc_channel[j] == p->type1.channel)
+                {
+                    channel[j] = p->type1.channel;
+                    // data[j] = p->type1.data;
+                    // adc_cali_raw_to_voltage(cali_handle_t_1, p->type1.data, &data[j]);
+                    if (adc_unit_id[j] == ADC_UNIT_1)
+                        adc_cali_raw_to_voltage(cali_handle_t_1, p->type1.data, &data[j]);
+                    else
+                        adc_cali_raw_to_voltage(cali_handle_t_2, p->type1.data, &data[j]);
+                    // count++;
+                    // break;
+                }
             }
+            // else
+            // {
+            //     if (adc_channel[j] == p->type2.channel)
+            //     {
+            //         channel[j] = p->type2.channel;
+            //         // data[j] = p->type2.data;
+            //         if (adc_unit_id[j] == ADC_UNIT_1)
+            //             adc_cali_raw_to_voltage(cali_handle_t_1, p->type2.data, &data[j]);
+            //         else
+            //             adc_cali_raw_to_voltage(cali_handle_t_2, p->type2.data, &data[j]);
+            //         // count++;
+            //         // break;
+            //     }
+            // }
             // printf("%d:%04ld\t", channel[j], data[j]);
         }
+        // if (count == gpio_num)
+        // {
+        //     count = 0;
+        //     break;
+        // }
+        // adc_cali_raw_to_voltage();
         // 此处可以加滤波器 如FIR滤波器
     }
-    // printf("\n");
+    // printf("\t");
 
-    //不知道该不该加
-    // adc_dma_ll_rx_start(adc_handle->hal.dev, adc_handle->hal.dma_chan, adc_handle->hal.rx_desc);
-    // adc_ll_digi_dma_enable();
-    // adc_ll_digi_trigger_enable(adc_handle->hal.dev);
+    // 不知道该不该加
+
+    //  adc_ll_digi_dma_enable();
+    //  adc_ll_digi_trigger_enable(adc_handle->hal.dev);
 
     return true;
 }
@@ -320,7 +359,6 @@ void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, uint32_t sample_freq_hz)
     adc_unit_id = heap_caps_calloc(1, gpio_num * sizeof(adc_unit_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 
     uint8_t channel_num = gpio_num;
-    bool conv_mode_single = true;      // 是否为单通道模式
     for (int i = 0; i < gpio_num; i++) // 获取ADC通道号和单元号
     {
         ESP_ERROR_CHECK(adc_continuous_io_to_channel(gpio[i], &adc_unit_id[i], &adc_channel[i]));
@@ -365,7 +403,7 @@ void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, uint32_t sample_freq_hz)
     dig_cfg.pattern_num = channel_num;
     for (int i = 0; i < channel_num; i++)
     {
-        adc_pattern[i].atten = ADC_ATTEN_DB_0;
+        adc_pattern[i].atten = ADC_ATTEN_DB;
         adc_pattern[i].channel = adc_channel[i];
         adc_pattern[i].unit = adc_unit_id[i];
         if (conv_mode_single == true)
@@ -379,6 +417,26 @@ void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, uint32_t sample_freq_hz)
     }
     dig_cfg.adc_pattern = adc_pattern;
     ESP_ERROR_CHECK(adc_continuous_config(adc_handle, &dig_cfg));
+
+    ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
+    adc_cali_line_fitting_config_t cali_config_1 = {
+        .unit_id = ADC_UNIT_1,
+        .atten = ADC_ATTEN_DB,
+        .bitwidth = SOC_ADC_DIGI_MAX_BITWIDTH,
+    };
+    adc_cali_line_fitting_config_t cali_config_2 = {
+        .unit_id = ADC_UNIT_2,
+        .atten = ADC_ATTEN_DB,
+        .bitwidth = SOC_ADC_DIGI_MAX_BITWIDTH,
+    };
+    if (conv_mode_single == false)
+    {
+        cali_config_1.bitwidth = SOC_ADC_DIGI_MAX_BITWIDTH - 1;
+        cali_config_2.bitwidth = SOC_ADC_DIGI_MAX_BITWIDTH - 1;
+    }
+
+    ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_config_1, &cali_handle_t_1));
+    ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_config_2, &cali_handle_t_2));
 
     // *out_handle = handle;
 
