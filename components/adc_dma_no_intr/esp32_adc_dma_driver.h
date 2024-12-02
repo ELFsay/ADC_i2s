@@ -98,9 +98,8 @@ bool read_adc_data(int32_t *data, uint8_t *channel, uint32_t gpio_num);
 
 void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, adc_atten_t atten, uint32_t sample_freq_hz);
 
+inline esp_err_t adc_dma_start(adc_continuous_handle_t handle) { return adc_continuous_start(handle); }
 
-inline esp_err_t adc_dma_start(adc_continuous_handle_t handle) { adc_continuous_start(handle); }
-
-inline esp_err_t adc_dma_stop(adc_continuous_handle_t handle) { adc_continuous_stop(handle); }
+inline esp_err_t adc_dma_stop(adc_continuous_handle_t handle) { return adc_continuous_stop(handle); }
 
 #endif //__ESP32_ADC_I2S_DRIVER_H__
