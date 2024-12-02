@@ -23,10 +23,12 @@ static TaskHandle_t s_task_handle;
 static const char *TAG = "EXAMPLE";
 int ADC_count = 0;
 static uint32_t IRAM_ATTR i2s_adc_buffer[2] = {0};
-#define FQ_Hz 400 * 1000
-#define gpio_num 2
-#define speed_test 1 //0 启用vofa波形读取
+#define FQ_Hz 1500 * 1000
+// #define COV_PER_PIN 4
+#define gpio_num 3
+#define speed_test 1 // 0 启用vofa波形读取
 uint8_t adc_io[gpio_num] = {34, 35, 32, 33};
+ adc_atten_t atten= ADC_ATTEN_DB_12;
 void Hz1()
 {
     volatile float float_a = 1.0f;
@@ -50,15 +52,23 @@ void Hz1()
     // size_t size = 0;
     int32_t data_buf[10] = {0};
     uint8_t channel[10] = {0};
+    // read_adc_data(data_buf, channel, gpio_num);
+
     for (uint32_t i = 0; i < times; i++)
     {
         // x*=3.5f;//120ns
-
+//  readFiFo();
+       if( read_adc_data(data_buf, channel, gpio_num)==false)
+       printf("read_adc_data error\n");
+//    if( read_adc_data(data_buf, channel, gpio_num)==false)
+//        printf("read_adc_data error\n");
+//          if( read_adc_data(data_buf, channel, gpio_num)==false)
+//        printf("read_adc_data error\n");
         // adc_hal_digi_start(&handle->hal, handle->rx_dma_buf);
         // adc_hal_digi_stop(&handle->hal);
         //  adc_dma_ll_rx_stop(handle->hal.dev, handle->hal.dma_chan);
         //  adc_dma_ll_rx_start(handle->hal.dev, handle->hal.dma_chan, handle->hal.rx_desc);
-        read_adc_data(data_buf, channel, gpio_num);
+        // read_adc_data(data_buf, channel, gpio_num);
         // while (adc_hal_check_event(&handle->hal, ADC_HAL_DMA_INTR_MASK) == false)
         //     ;
         // adc_hal_digi_clr_intr(&handle->hal, ADC_HAL_DMA_INTR_MASK);
@@ -91,7 +101,7 @@ void app_main(void)
     // s_task_handle = xTaskGetCurrentTaskHandle();
 
     // continuous_adc_init(channel, sizeof(channel) / sizeof(adc_channel_t), &handle);
-    adc_dma_init(adc_io, sizeof(adc_io) / sizeof(uint8_t), FQ_Hz);
+    adc_dma_init(adc_io, sizeof(adc_io) / sizeof(uint8_t),atten, FQ_Hz);
     // adc_continuous_evt_cbs_t cbs = {
     //     .on_conv_done = s_conv_done_cb, // 3130ns
     //     // .on_conv_done = NULL//224ns

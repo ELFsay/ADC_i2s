@@ -4,27 +4,24 @@
 #include "esp_clk_tree.h"
 #include <driver/gpio.h>
 #include "soc/lldesc.h"
-#include <esp_adc/adc_cali_scheme.h>
+#include <esp_log.h>
 // 多adc单元不完整且未测试
 //  #define DMA_CONTINUE false
 #define DMA_INTR false
-#define ADC_ATTEN_DB ADC_ATTEN_DB_12 // adc参考电压1.1v
-adc_channel_t *adc_channel = NULL;
-adc_unit_t *adc_unit_id = NULL;
-uint32_t adc_conv_frame_size = 0;
-bool conv_mode_single = true; // 是否为单通道模式
-
-adc_continuous_handle_t adc_handle = NULL;
-adc_cali_handle_t cali_handle_t_1 = NULL;
-adc_cali_handle_t cali_handle_t_2 = NULL;
+// #define ADC_ATTEN_DB ADC_ATTEN_DB_12 // adc参考电压1.1v
+adc_handle_t adc_handle;
 
 static const char *TAG = "adc_dma_oneshot";
-#define INTERNAL_BUF_NUM 3
+// 内部缓冲区个数 改成1会读取有问题，漏数据之类的，疑似DMA重启速度慢,不连续读取时 单通道极限速度约613khz(采样频率1.5MHz)
+#define INTERNAL_BUF_NUM 5
+
 #if CONFIG_IDF_TARGET_ESP32
 esp_err_t i2s_platform_acquire_occupation(int id, const char *comp_name);
 void adc_apb_periph_claim(void);
 #define adc_ll_digi_dma_enable() adc_ll_digi_set_data_source(1) // Will this influence I2S0
 #define adc_ll_digi_dma_disable() adc_ll_digi_set_data_source(0)
+#define adc_ll_digi_trigger_enable(dev) i2s_ll_rx_start(dev)
+#define adc_ll_digi_trigger_disable(dev) i2s_ll_rx_stop(dev)
 /*
 #define adc_dma_ll_rx_get_intr(dev, mask) ({ i2s_ll_get_intr_status(dev) & mask; })
 #define adc_dma_ll_rx_clear_intr(dev, chan, mask) i2s_ll_clear_intr_status(dev, mask)
@@ -69,70 +66,51 @@ void adc_apb_periph_claim(void);
 IRAM_ATTR bool read_adc_data(int32_t *data, uint8_t *channel, uint32_t gpio_num)
 {
 
-    while (adc_hal_check_event(&adc_handle->hal, ADC_HAL_DMA_INTR_MASK) == false) // 等待DMA转换换成
+    while (adc_hal_check_event(&adc_handle.continuous_handle->hal, ADC_HAL_DMA_INTR_MASK) == false) // 等待DMA转换换成
         ;
-    adc_hal_digi_clr_intr(&adc_handle->hal, ADC_HAL_DMA_INTR_MASK); // 清除DMA标志位
+    adc_hal_digi_clr_intr(&adc_handle.continuous_handle->hal, ADC_HAL_DMA_INTR_MASK); // 清除DMA标志位
 
-    // 不知道该不该加
-    // adc_handle->rx_eof_desc_addr = adc_hal_get_desc_addr(&adc_handle->hal);
-    //
-    // adc_ll_digi_dma_disable();
-    // adc_ll_digi_trigger_disable(adc_handle->hal.dev);
+    // 不知道该不该加，加了启停后速度下降了
+    // adc_ll_digi_trigger_disable(adc_handle.continuous_handle->hal.dev);
+    // 或
+    // CLEAR_PERI_REG_MASK(I2S_CONF_REG(0), I2S_RX_START); // Stop aquisition to buffer
 
     // 转换数据格式
-    // for (int i = 0; i < gpio_num; i++)
-    for (int i = 0; i < adc_conv_frame_size * INTERNAL_BUF_NUM; i += SOC_ADC_DIGI_RESULT_BYTES)
+    // int k = 0;
+    // for ( ; k < adc_handle.conversions_per_channel*INTERNAL_BUF_NUM; k++) // 选择第k次转换结果
+    // for (int k = 0; k < adc_handle.conversions_per_channel; k++) // 选择第k次转换结果
+    for (int j = 0; j < gpio_num; j++)
     {
-        adc_digi_output_data_t *p = (void *)&adc_handle->rx_dma_buf[i];
-        // static int count = 0;//数据足够后跳出 但无法使用滤波器
+        data[j] = -1;
+        channel[j] = 255;
 
-        for (int j = 0; j < gpio_num; j++)
+        // for (int i = 0; i < adc_handle.adc_config.max_store_buf_size; i += SOC_ADC_DIGI_RESULT_BYTES)
+        //倒序读取获取的值可能滞后更小，不肯定，可以尝试正序读取
+        for (int i = adc_handle.adc_config.max_store_buf_size - SOC_ADC_DIGI_RESULT_BYTES; i >= 0; i -= SOC_ADC_DIGI_RESULT_BYTES)
         {
-            if (conv_mode_single == true)
+            adc_digi_output_data_t *p = (adc_digi_output_data_t *)&adc_handle.continuous_handle->rx_dma_buf[i];
+
+            if (adc_handle.adc_channel[j] == p->type1.channel) // 核对通道
             {
-                if (adc_channel[j] == p->type1.channel)
-                {
-                    channel[j] = p->type1.channel;
-                    // data[j] = p->type1.data;
-                    // adc_cali_raw_to_voltage(cali_handle_t_1, p->type1.data, &data[j]);
-                    if (adc_unit_id[j] == ADC_UNIT_1)
-                        adc_cali_raw_to_voltage(cali_handle_t_1, p->type1.data, &data[j]);
-                    else
-                        adc_cali_raw_to_voltage(cali_handle_t_2, p->type1.data, &data[j]);
-                    // count++;
-                    // break;
-                }
+                channel[j] = p->type1.channel;
+                if (adc_handle.adc_unit_id[j] == ADC_UNIT_1)
+                    adc_cali_raw_to_voltage(adc_handle.cali_handle_t[ADC_UNIT_1], p->type1.data, &data[j]);
+                else
+                    adc_cali_raw_to_voltage(adc_handle.cali_handle_t[ADC_UNIT_2], p->type1.data, &data[j]);
+                // printf("%d:%04ld\t", channel[j], data[j]);
+                break;
             }
-            // else
-            // {
-            //     if (adc_channel[j] == p->type2.channel)
-            //     {
-            //         channel[j] = p->type2.channel;
-            //         // data[j] = p->type2.data;
-            //         if (adc_unit_id[j] == ADC_UNIT_1)
-            //             adc_cali_raw_to_voltage(cali_handle_t_1, p->type2.data, &data[j]);
-            //         else
-            //             adc_cali_raw_to_voltage(cali_handle_t_2, p->type2.data, &data[j]);
-            //         // count++;
-            //         // break;
-            //     }
-            // }
-            // printf("%d:%04ld\t", channel[j], data[j]);
         }
-        // if (count == gpio_num)
-        // {
-        //     count = 0;
-        //     break;
-        // }
-        // adc_cali_raw_to_voltage();
-        // 此处可以加滤波器 如FIR滤波器
+        // printf("%d:%04ld\t", channel[j], data[j]);
+        if (channel[j] == 255 || data[j] == -1) // 读取失败建议增加INTERNAL_BUF_NUM
+            return false;
     }
-    // printf("\t");
+    // printf("\n");
 
     // 不知道该不该加
-
-    //  adc_ll_digi_dma_enable();
-    //  adc_ll_digi_trigger_enable(adc_handle->hal.dev);
+    // adc_ll_digi_trigger_enable(adc_handle.continuous_handle->hal.dev);
+    // 或
+    // SET_PERI_REG_MASK(I2S_CONF_REG(0), I2S_RX_START); // Restart aquisition to buffer
 
     return true;
 }
@@ -190,6 +168,7 @@ IRAM_ATTR bool s_adc_dma_intr(adc_continuous_ctx_t *adc_digi_ctx)
 }
 IRAM_ATTR void adc_dma_intr_handler(void *arg)
 {
+
     adc_continuous_ctx_t *ctx = (adc_continuous_ctx_t *)arg;
     bool need_yield = false;
 
@@ -209,6 +188,7 @@ IRAM_ATTR void adc_dma_intr_handler(void *arg)
         portYIELD_FROM_ISR();
     }
 }
+
 static esp_err_t adc_dma_new_handle(const adc_continuous_handle_cfg_t *hdl_config, adc_continuous_handle_t *ret_handle)
 {
     esp_err_t ret = ESP_OK;
@@ -353,42 +333,47 @@ cleanup:
     adc_continuous_deinit(adc_ctx);
     return ret;
 }
-void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, uint32_t sample_freq_hz)
+void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, adc_atten_t atten, uint32_t sample_freq_hz)
 {
-    adc_channel = heap_caps_calloc(1, gpio_num * sizeof(adc_channel_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    adc_unit_id = heap_caps_calloc(1, gpio_num * sizeof(adc_unit_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    adc_handle.adc_channel = heap_caps_calloc(1, gpio_num * sizeof(adc_channel_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    adc_handle.adc_unit_id = heap_caps_calloc(1, gpio_num * sizeof(adc_unit_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    adc_handle.channel_num = gpio_num;
+    adc_handle.gpio = gpio;
+    // adc_handle.sample_freq_hz = sample_freq_hz;
 
-    uint8_t channel_num = gpio_num;
-    for (int i = 0; i < gpio_num; i++) // 获取ADC通道号和单元号
-    {
-        ESP_ERROR_CHECK(adc_continuous_io_to_channel(gpio[i], &adc_unit_id[i], &adc_channel[i]));
-        if ((i > 0) && (adc_unit_id[i] != adc_unit_id[i - 1]))
-        {
-            conv_mode_single = false;
-        }
-    }
-    // adc_continuous_handle_t handle = NULL;
+    // 配置adc_config参数
+    adc_continuous_handle_cfg_t _adc_config;
+    uint32_t total_adc_frame_size = gpio_num * SOC_ADC_DIGI_RESULT_BYTES;
 
-    adc_continuous_handle_cfg_t adc_config = {
-        .max_store_buf_size = SOC_ADC_DIGI_DATA_BYTES_PER_CONV * INTERNAL_BUF_NUM,
-        .conv_frame_size = SOC_ADC_DIGI_DATA_BYTES_PER_CONV,
-    };
-    if (gpio_num % 2 == 1)
-    {
-        adc_config.conv_frame_size = SOC_ADC_DIGI_DATA_BYTES_PER_CONV * (gpio_num / 2 + 1);
-    }
+    if (total_adc_frame_size % SOC_ADC_DIGI_DATA_BYTES_PER_CONV != 0) // dma要求数据帧必须是SOC_ADC_DIGI_DATA_BYTES_PER_CONV的整数倍
+        _adc_config.conv_frame_size = (total_adc_frame_size / SOC_ADC_DIGI_DATA_BYTES_PER_CONV + 1) * SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
     else
-        adc_config.conv_frame_size = SOC_ADC_DIGI_DATA_BYTES_PER_CONV * (gpio_num / 2);
-    adc_conv_frame_size = adc_config.conv_frame_size;
+        _adc_config.conv_frame_size = total_adc_frame_size;
 
-    ESP_ERROR_CHECK(adc_dma_new_handle(&adc_config, &adc_handle));
+    // _adc_config.conv_frame_size *= conversions_per_pin;
+    _adc_config.max_store_buf_size = _adc_config.conv_frame_size * INTERNAL_BUF_NUM;
 
+    adc_handle.adc_config = _adc_config;
+    // 获取continuous_handle
+    ESP_ERROR_CHECK(adc_dma_new_handle(&adc_handle.adc_config, &adc_handle.continuous_handle));
+    // 获取ADC通道号和单元号
+    adc_handle.continuous_handle->use_adc1 = false;
+    adc_handle.continuous_handle->use_adc2 = false;
+    for (int i = 0; i < gpio_num; i++)
+    {
+        ESP_ERROR_CHECK(adc_continuous_io_to_channel(gpio[i], &adc_handle.adc_unit_id[i], &adc_handle.adc_channel[i]));
+        if (adc_handle.adc_unit_id[i] == ADC_UNIT_1)
+            adc_handle.continuous_handle->use_adc1 = true;
+        else if (adc_handle.adc_unit_id[i] == ADC_UNIT_2)
+            adc_handle.continuous_handle->use_adc2 = true;
+    }
+    // 配置dig控制器
     adc_continuous_config_t dig_cfg = {
         .sample_freq_hz = sample_freq_hz,
     };
-    if (conv_mode_single == true)
+    if (adc_handle.continuous_handle->use_adc1 != adc_handle.continuous_handle->use_adc2)
     {
-        if (adc_unit_id[0] == ADC_UNIT_1)
+        if (adc_handle.continuous_handle->use_adc1 == true)
             dig_cfg.conv_mode = ADC_CONV_SINGLE_UNIT_1;
         else
             dig_cfg.conv_mode = ADC_CONV_SINGLE_UNIT_2;
@@ -398,15 +383,16 @@ void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, uint32_t sample_freq_hz)
         dig_cfg.conv_mode = ADC_CONV_BOTH_UNIT;
         dig_cfg.format = ADC_DIGI_OUTPUT_FORMAT_TYPE2;
     }
-
+    adc_handle.dig_cfg = dig_cfg;
+    // 配置dig控制器样式表
     adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
-    dig_cfg.pattern_num = channel_num;
-    for (int i = 0; i < channel_num; i++)
+    dig_cfg.pattern_num = adc_handle.channel_num;
+    for (int i = 0; i < adc_handle.channel_num; i++)
     {
-        adc_pattern[i].atten = ADC_ATTEN_DB;
-        adc_pattern[i].channel = adc_channel[i];
-        adc_pattern[i].unit = adc_unit_id[i];
-        if (conv_mode_single == true)
+        adc_pattern[i].atten = atten;
+        adc_pattern[i].channel = adc_handle.adc_channel[i];
+        adc_pattern[i].unit = adc_handle.adc_unit_id[i];
+        if (adc_handle.continuous_handle->use_adc1 != adc_handle.continuous_handle->use_adc2)
             adc_pattern[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
         else
             adc_pattern[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH - 1;
@@ -416,31 +402,23 @@ void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, uint32_t sample_freq_hz)
         ESP_LOGI(TAG, "adc_pattern[%d].unit is :%" PRIx8, i, adc_pattern[i].unit);
     }
     dig_cfg.adc_pattern = adc_pattern;
-    ESP_ERROR_CHECK(adc_continuous_config(adc_handle, &dig_cfg));
-
+    ESP_ERROR_CHECK(adc_continuous_config(adc_handle.continuous_handle, &dig_cfg));
+    // 配置adc校准器
     ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
     adc_cali_line_fitting_config_t cali_config_1 = {
         .unit_id = ADC_UNIT_1,
-        .atten = ADC_ATTEN_DB,
-        .bitwidth = SOC_ADC_DIGI_MAX_BITWIDTH,
+        .atten = atten,
+        .bitwidth = adc_pattern[1].bit_width,
     };
     adc_cali_line_fitting_config_t cali_config_2 = {
         .unit_id = ADC_UNIT_2,
-        .atten = ADC_ATTEN_DB,
-        .bitwidth = SOC_ADC_DIGI_MAX_BITWIDTH,
+        .atten = atten,
+        .bitwidth = adc_pattern[2].bit_width,
     };
-    if (conv_mode_single == false)
-    {
-        cali_config_1.bitwidth = SOC_ADC_DIGI_MAX_BITWIDTH - 1;
-        cali_config_2.bitwidth = SOC_ADC_DIGI_MAX_BITWIDTH - 1;
-    }
-
-    ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_config_1, &cali_handle_t_1));
-    ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_config_2, &cali_handle_t_2));
-
-    // *out_handle = handle;
-
-    ESP_ERROR_CHECK(adc_continuous_start(adc_handle));
+    ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_config_1, &adc_handle.cali_handle_t[0]));
+    ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_config_2, &adc_handle.cali_handle_t[1]));
+    // 启动ADC
+    ESP_ERROR_CHECK(adc_continuous_start(adc_handle.continuous_handle));
 }
 // static void adc_hal_digi_dma_link_descriptors(dma_descriptor_t *desc, uint8_t *data_buf, uint32_t per_eof_size, uint32_t eof_step, uint32_t eof_num)
 // {

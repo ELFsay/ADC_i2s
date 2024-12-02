@@ -9,6 +9,7 @@
 #include <esp_pm.h>
 #include "esp_check.h"
 #include "esp_adc/adc_continuous.h" //其余函数可从该头文件中寻找
+#include <esp_adc/adc_cali_scheme.h>
 
 typedef enum
 {
@@ -64,26 +65,38 @@ struct adc_continuous_ctx_t
     adc_iir_filter_t *iir_filter[SOC_ADC_DIGI_IIR_FILTER_NUM]; // ADC IIR filter context
 #endif
 };
+typedef struct adc_handle_t
+{
 
+    uint8_t *gpio;
+    adc_channel_t *adc_channel;
+    adc_unit_t *adc_unit_id;
+    uint8_t channel_num;
 
-// 读取ADC数据的函数。
+    adc_continuous_handle_t continuous_handle;
+    adc_continuous_handle_cfg_t adc_config;
+    adc_continuous_config_t dig_cfg;
+    adc_atten_t atten[2];
+    adc_cali_handle_t cali_handle_t[2];
+} adc_handle_t;
+
+// 读取ADC数据的函数。目前只支持单个单元的多通道读取。
 // 参数：
 // - data：指向存储ADC读取结果的uint32_t数组的指针。
 // - channel：指向用于指定读取的ADC通道的uint8_t指针。
 // - gpio_num：指定连接到ADC的GPIO引脚的数量。
 bool read_adc_data(int32_t *data, uint8_t *channel, uint32_t gpio_num);
 
-
 // esp_err_t adc_dma_new_handle(const adc_continuous_handle_cfg_t *hdl_config, adc_continuous_handle_t *ret_handle);
-
 
 // 初始化ADC DMA。
 // 参数：
 // - gpio：指向GPIO数组的指针，用于指定ADC输入的GPIO引脚。
 // - gpio_num：指定GPIO引脚的数量。
+// - atten：指向ADC的衰减值数组的指针。
 // - sample_freq_hz：采样频率（以赫兹为单位）。
 
-void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, uint32_t sample_freq_hz);
+void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, adc_atten_t atten, uint32_t sample_freq_hz);
 
 
 inline esp_err_t adc_dma_start(adc_continuous_handle_t handle) { adc_continuous_start(handle); }
