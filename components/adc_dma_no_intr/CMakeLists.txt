@@ -1,3 +1,3 @@
-idf_component_register(SRCS "esp32_adc_dma_driver.c"
+idf_component_register(SRCS
                     INCLUDE_DIRS "."
                     REQUIRES esp_adc  driver freertos) 

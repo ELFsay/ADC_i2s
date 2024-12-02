@@ -65,7 +65,7 @@ struct adc_continuous_ctx_t
     adc_iir_filter_t *iir_filter[SOC_ADC_DIGI_IIR_FILTER_NUM]; // ADC IIR filter context
 #endif
 };
-typedef struct adc_handle_t
+typedef struct adc_dma_driver_handle_t
 {
 
     uint8_t *gpio;
@@ -78,7 +78,7 @@ typedef struct adc_handle_t
     adc_continuous_config_t dig_cfg;
     adc_atten_t atten[2];
     adc_cali_handle_t cali_handle_t[2];
-} adc_handle_t;
+} adc_dma_driver_handle_t;
 
 // 读取ADC数据的函数。目前只支持单个单元的多通道读取。
 // 参数：
@@ -98,8 +98,9 @@ bool read_adc_data(int32_t *data, uint8_t *channel, uint32_t gpio_num);
 
 void adc_dma_init(uint8_t *gpio, uint8_t gpio_num, adc_atten_t atten, uint32_t sample_freq_hz);
 
+
 inline esp_err_t adc_dma_start(adc_continuous_handle_t handle) { return adc_continuous_start(handle); }
 
-inline esp_err_t adc_dma_stop(adc_continuous_handle_t handle) { return adc_continuous_stop(handle); }
+inline esp_err_t adc_dma_stop(adc_continuous_handle_t handle) {  return adc_continuous_stop(handle); }
 
 #endif //__ESP32_ADC_I2S_DRIVER_H__
