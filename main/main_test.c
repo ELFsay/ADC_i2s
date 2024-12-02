@@ -9,7 +9,7 @@
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include"esp_task_wdt.h"
+#include "esp_task_wdt.h"
 #include "esp32_adc_dma_driver.h"
 
 #define FQ_Hz 1500 * 1000
@@ -32,15 +32,21 @@ void Hz1()
     float for_avg_time = (for_end - for_start) * 1.0f / times;
     // printf("for 1M times, total time:%ld us, average time%f \t", for_end - for_start, for_avg_time);
 
-
     uint32_t start = esp_timer_get_time();
-
 
     for (uint32_t i = 0; i < times; i++)
     {
 
         if (read_adc_data(data_buf, channel, gpio_num) == false)
             printf("read_adc_data error\n");
+
+        for (int i = 0; i < gpio_num; i++)
+        {
+            float alph = 0.99f;
+            static int32_t last_data[gpio_num] = {0};
+            data_buf[i] = (data_buf[i] * alph + last_data[i] * (1.0f - alph));
+            last_data[i] = data_buf[i];
+        }
     }
     uint32_t end = esp_timer_get_time();
     float total_time_us = (end - start) - (for_end - for_start);
